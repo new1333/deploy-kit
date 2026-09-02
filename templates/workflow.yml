@@ -1,0 +1,34 @@
+# 模板：项目仓库的薄部署 workflow。复制到 <项目>/.github/workflows/deploy.yml，
+# 替换 with: 下的取值；test job 按项目实际测试命令改写。
+name: deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "回滚用：指定旧 tag（空 = 部署最新）"
+        required: false
+        default: ""
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # …项目自己的 lint / typecheck / 单测…
+
+  deploy:
+    needs: test
+    uses: new1333/deploy-kit/.github/workflows/deploy.yml@v1
+    secrets: inherit
+    with:
+      project: <project>            # 小写 slug，全局唯一
+      dockerfile: deploy/Dockerfile
+      app_target: runner            # app 镜像构建 target
+      migrate_target: ""            # 迁移镜像 target，无则留空
+      deploy_files: compose.yaml    # 同步到 /opt/<project>/ 的文件，可多行
+      edge_site_file: deploy/edge-site.caddy
+      verify_url: ""                # 部署后健康验证 URL，如 https://<域名>/api/health
+      image_tag: ${{ inputs.image_tag || '' }}

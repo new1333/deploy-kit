@@ -1,0 +1,3 @@
+# 共享 edge 主配置：站点块全部来自各项目写入的 hosts/<project>.caddy。
+# TLS 证书由 Caddy 自动申请与续期（存 edge_caddy_data 卷）。
+import /etc/caddy/hosts/*.caddy

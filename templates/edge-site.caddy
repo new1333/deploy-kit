@@ -1,0 +1,15 @@
+# 模板：项目站点块。复制到 <项目>/deploy/edge-site.caddy，
+# 部署时自动写入 VPS /opt/edge/hosts/<project>.caddy 并热加载。
+# reverse_proxy 目标 = 项目 compose 中 app 服务在 edge 网络上的别名:容器端口。
+#
+# 有域名（自动 HTTPS）：
+#   notes.example.com {
+#   	encode zstd gzip
+#   	reverse_proxy <project>-app:6318
+#   }
+#
+# 暂无域名（纯 HTTP，按 VPS IP 访问）：
+http://<VPS_IP> {
+	encode zstd gzip
+	reverse_proxy <project>-app:6318
+}

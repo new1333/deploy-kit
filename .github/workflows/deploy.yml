@@ -1,0 +1,215 @@
+name: Deploy
+
+# 项目无关的可复用部署流程：构建镜像 → 推 GHCR → SSH 到 VPS 增量更新。
+# 接入方式见仓库 README；所有隔离标识（/opt/<project>、edge 站点文件、
+# 网络别名、镜像名、清理范围）由 project 输入单点派生。
+
+on:
+  workflow_call:
+    inputs:
+      project:
+        description: 项目 slug（小写，决定 VPS 上一切隔离标识）
+        required: true
+        type: string
+      dockerfile:
+        description: Dockerfile 路径
+        required: true
+        type: string
+      app_target:
+        description: app 镜像的构建 target
+        required: true
+        type: string
+      migrate_target:
+        description: 迁移镜像的构建 target（空 = 无数据库迁移）
+        required: false
+        type: string
+        default: ""
+      deploy_files:
+        description: 需同步到 /opt/<project>/ 的文件（多行）
+        required: false
+        type: string
+        default: "compose.yaml"
+      edge_site_file:
+        description: edge 站点配置文件路径（空 = 本项目不占用 edge）
+        required: false
+        type: string
+        default: ""
+      image_tag:
+        description: 回滚用：指定旧 tag（空 = 本次 commit 短 sha）
+        required: false
+        type: string
+        default: ""
+      verify_url:
+        description: 部署后健康验证 URL（空 = 跳过验证）
+        required: false
+        type: string
+        default: ""
+    secrets:
+      SSH_PRIVATE_KEY:
+        required: true
+      VPS_HOST:
+        required: true
+      VPS_USER:
+        required: true
+      VPS_PORT:
+        required: false
+      POSTGRES_DB:
+        required: false
+      POSTGRES_USER:
+        required: false
+      POSTGRES_PASSWORD:
+        required: false
+      APP_ORIGIN:
+        required: false
+      LOG_LEVEL:
+        required: false
+      EXTRA_ENV:
+        required: false
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build-push:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.vars.outputs.tag }}
+      owner: ${{ steps.vars.outputs.owner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 计算镜像 tag 与 owner（小写）
+        id: vars
+        run: |
+          if [ -n "${{ inputs.image_tag }}" ]; then
+            echo "tag=${{ inputs.image_tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=${GITHUB_SHA:0:7}" >> "$GITHUB_OUTPUT"
+          fi
+          echo "owner=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ github.token }}
+
+      - name: 构建并推送 app 镜像
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ inputs.dockerfile }}
+          target: ${{ inputs.app_target }}
+          push: true
+          tags: |
+            ghcr.io/${{ steps.vars.outputs.owner }}/${{ inputs.project }}-app:${{ steps.vars.outputs.tag }}
+            ghcr.io/${{ steps.vars.outputs.owner }}/${{ inputs.project }}-app:main
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: 构建并推送 migrate 镜像
+        if: ${{ inputs.migrate_target != '' }}
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ inputs.dockerfile }}
+          target: ${{ inputs.migrate_target }}
+          push: true
+          tags: |
+            ghcr.io/${{ steps.vars.outputs.owner }}/${{ inputs.project }}-migrate:${{ steps.vars.outputs.tag }}
+            ghcr.io/${{ steps.vars.outputs.owner }}/${{ inputs.project }}-migrate:main
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy:
+    needs: build-push
+    runs-on: ubuntu-latest
+    steps:
+      # 检出调用方仓库（编排文件、站点配置）
+      - uses: actions/checkout@v4
+      # 检出本框架仓库自身（edge 编排、部署脚本）
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ github.action_repository }}
+          ref: ${{ github.action_ref }}
+          path: deploy-kit
+
+      - name: EXTRA_ENV base64 编码（规避 SSH 通道多行值问题）
+        id: extra
+        env:
+          RAW: ${{ secrets.EXTRA_ENV }}
+        run: echo "b64=$(printf %s "$RAW" | base64 -w0)" >> "$GITHUB_OUTPUT"
+
+      - name: 打包部署 bundle
+        env:
+          DEPLOY_FILES: ${{ inputs.deploy_files }}
+          EDGE_SITE_FILE: ${{ inputs.edge_site_file }}
+        run: |
+          mkdir -p bundle/edge bundle/project
+          cp deploy-kit/edge/compose.yaml deploy-kit/edge/Caddyfile bundle/edge/
+          cp deploy-kit/scripts/deploy.sh bundle/
+          while IFS= read -r f; do
+            [ -n "$f" ] || continue
+            mkdir -p "bundle/project/$(dirname "$f")"
+            cp "$f" "bundle/project/$f"
+          done <<< "$DEPLOY_FILES"
+          if [ -n "$EDGE_SITE_FILE" ]; then
+            cp "$EDGE_SITE_FILE" bundle/site.caddy
+          fi
+          tar -C bundle -czf deploy-bundle.tar.gz .
+
+      - name: 上传 bundle 到 VPS
+        uses: appleboy/scp-action@v1
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: ${{ secrets.VPS_PORT || 22 }}
+          source: deploy-bundle.tar.gz
+          target: /tmp/deploy-stage
+          overwrite: true
+
+      - name: 执行部署
+        uses: appleboy/ssh-action@v1
+        env:
+          PROJECT: ${{ inputs.project }}
+          TAG: ${{ needs.build-push.outputs.tag }}
+          OWNER: ${{ needs.build-push.outputs.owner }}
+          MIGRATE_TARGET: ${{ inputs.migrate_target }}
+          POSTGRES_DB: ${{ secrets.POSTGRES_DB }}
+          POSTGRES_USER: ${{ secrets.POSTGRES_USER }}
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          APP_ORIGIN: ${{ secrets.APP_ORIGIN }}
+          LOG_LEVEL: ${{ secrets.LOG_LEVEL }}
+          EXTRA_ENV_B64: ${{ steps.extra.outputs.b64 }}
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: ${{ secrets.VPS_PORT || 22 }}
+          envs: PROJECT,TAG,OWNER,MIGRATE_TARGET,POSTGRES_DB,POSTGRES_USER,POSTGRES_PASSWORD,APP_ORIGIN,LOG_LEVEL,EXTRA_ENV_B64
+          script: |
+            mkdir -p /tmp/deploy-stage/extracted
+            tar -xzf /tmp/deploy-stage/deploy-bundle.tar.gz -C /tmp/deploy-stage/extracted
+            bash /tmp/deploy-stage/extracted/deploy.sh
+
+  verify:
+    needs: deploy
+    if: ${{ inputs.verify_url != '' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: 线上健康验证
+        env:
+          VERIFY_URL: ${{ inputs.verify_url }}
+        run: |
+          for i in $(seq 1 10); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' --connect-timeout 10 -m 20 "$VERIFY_URL" || true)
+            [ "$code" = "200" ] && { echo "health check OK: $VERIFY_URL"; exit 0; }
+            echo "attempt $i: HTTP $code, retrying..."
+            sleep 6
+          done
+          echo "::error::health check failed for $VERIFY_URL"
+          exit 1

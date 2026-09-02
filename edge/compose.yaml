@@ -1,0 +1,32 @@
+name: edge
+
+# 全 VPS 唯一的共享边缘反代：独占 80/443，按域名把流量转发到各项目 app 容器。
+# 各项目站点配置位于 ./hosts/<project>.caddy（由各项目部署流程写入并热加载）。
+services:
+  caddy:
+    image: caddy:2-alpine
+    container_name: edge-caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./hosts:/etc/caddy/hosts:ro
+      - edge_caddy_data:/data
+      - edge_caddy_config:/config
+    networks:
+      - edge
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  edge:
+    name: edge
+
+volumes:
+  edge_caddy_data:
+  edge_caddy_config:
