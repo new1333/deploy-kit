@@ -47,31 +47,7 @@ on:
         required: false
         type: boolean
         default: false
-    secrets:
-      SSH_PRIVATE_KEY:
-        required: true
-      VPS_HOST:
-        required: true
-      VPS_USER:
-        required: true
-      VPS_PORT:
-        required: false
-      POSTGRES_DB:
-        required: false
-      POSTGRES_USER:
-        required: false
-      POSTGRES_PASSWORD:
-        required: false
-      APP_ORIGIN:
-        required: false
-      LOG_LEVEL:
-        required: false
-      EXTRA_ENV:
-        required: false
 
-permissions:
-  contents: read
-  packages: write
 
 jobs:
   build-push:
