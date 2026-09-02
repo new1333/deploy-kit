@@ -44,6 +44,11 @@ on:
         required: false
         type: string
         default: ""
+      public_images:
+        description: 是否将 GHCR 镜像包设为 public（VPS 免认证拉取）
+        required: false
+        type: boolean
+        default: false
     secrets:
       SSH_PRIVATE_KEY:
         required: true
@@ -123,6 +128,31 @@ jobs:
             ghcr.io/${{ steps.vars.outputs.owner }}/${{ inputs.project }}-migrate:main
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      # GHCR 新建包默认 private；public_images=true 时用内置 GITHUB_TOKEN 翻成
+      # public，免去 VPS 侧拉取认证。包注册略有延迟，重试几次。
+      - name: 将镜像包设为 public
+        if: ${{ inputs.public_images }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OWNER: ${{ steps.vars.outputs.owner }}
+          PROJECT: ${{ inputs.project }}
+        run: |
+          for name in "${PROJECT}-app" "${PROJECT}-migrate"; do
+            ok=""
+            for i in 1 2 3 4 5 6; do
+              code=$(curl -s -o /dev/null -w '%{http_code}' -X PATCH \
+                -H "Authorization: Bearer $GH_TOKEN" \
+                -H "Accept: application/vnd.github+json" \
+                -H "Content-Type: application/json" \
+                -d '{"visibility":"public"}' \
+                "https://api.github.com/user/packages/container/${name}")
+              if [ "$code" = "204" ]; then ok=1; echo "public: $name"; break; fi
+              echo "flip $name attempt $i -> HTTP $code"
+              sleep 10
+            done
+            [ -n "$ok" ] || { echo "::warning::failed to set $name public (HTTP $code)"; }
+          done
 
   deploy:
     needs: build-push
