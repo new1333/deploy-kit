@@ -12,6 +12,12 @@ on:
         required: false
         default: ""
 
+# 调用方需显式声明 permissions，使 deploy-kit 的 packages: write 落在令牌上限内
+#（新仓库默认令牌只读，缺省时被调用 workflow 会 startup_failure）
+permissions:
+  contents: read
+  packages: write
+
 jobs:
   test:
     runs-on: ubuntu-latest
