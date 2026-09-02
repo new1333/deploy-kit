@@ -1,0 +1,11 @@
+name: selftest
+# 诊断用：最小调用者，验证本仓库 reusable workflow 能否被正常解析启动
+on: workflow_dispatch
+jobs:
+  call:
+    uses: new1333/deploy-kit/.github/workflows/deploy.yml@main
+    secrets: inherit
+    with:
+      project: selftest
+      dockerfile: nonexistent.Dockerfile
+      app_target: runner
