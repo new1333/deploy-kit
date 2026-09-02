@@ -31,4 +31,4 @@ jobs:
       deploy_files: compose.yaml    # 同步到 /opt/<project>/ 的文件，可多行
       edge_site_file: deploy/edge-site.caddy
       verify_url: ""                # 部署后健康验证 URL，如 https://<域名>/api/health
-      image_tag: ${{ inputs.image_tag || '' }}
+      image_tag: ${{ github.event.inputs.image_tag || '' }}
