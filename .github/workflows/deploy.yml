@@ -160,11 +160,13 @@ jobs:
     steps:
       # 检出调用方仓库（编排文件、站点配置）
       - uses: actions/checkout@v4
-      # 检出本框架仓库自身（edge 编排、部署脚本）
+      # 检出本框架仓库自身（edge 编排、部署脚本）。
+      # 注意：github.action_repository 在 step 的 with 中指向当前执行的 action
+      # （如 actions/checkout），不能用于定位本仓库，因此显式写死，升级随 tag 推进。
       - uses: actions/checkout@v4
         with:
-          repository: ${{ github.action_repository }}
-          ref: ${{ github.action_ref }}
+          repository: new1333/deploy-kit
+          ref: v1
           path: deploy-kit
 
       - name: EXTRA_ENV base64 编码（规避 SSH 通道多行值问题）
